@@ -54,12 +54,13 @@ rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
 ##########################################################
 
+# Begin own code
 
 library(lubridate)
 library(stringr)
 
 # Cleaning the datasets
-# Add columns for title year, rating year, and boolean
+# Add columns for title year, rating year, and boolean variables for genres
 
 edx <- edx %>% mutate(
   rating_year = year(as_datetime(timestamp)),
