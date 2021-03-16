@@ -1,0 +1,370 @@
+---
+title: "MovieLens Project"
+author: "Dylan Henderson"
+date: "3/12/2021"
+output: html_document
+---
+```{r loading-data, echo=FALSE, results='hide', message=FALSE, warning=FALSE}
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+INTRODUCTION
+
+The relevant dataset in this project includes 10 million observations of movie ratings representing more than 70,000 unique users and 10,000 movies. In addition to a rating, other important variables were included such as movie title, year of release, and genres. The dataset was partitioned into a training set ("edx") and a final hold-out test set ("validation"). 
+
+```{r data summary}
+str(validation)
+```
+
+The goal of the project was to develop a model using the edx dataset in order to make predictions of movie ratings in the validation set. Accordingly, the validation set was used only to evaluate the accuracy of these predictions based on the residual mean squared error ("RMSE"). 
+
+Once the data was loaded into RStudio, it was cleaned to facilitate data exploration. This produced meaningful insights which then informed a framework for an initial model. Potential improvements to this model were explored and tested iteratively until a final model with a satisfactory RMSE was reached.
+
+
+
+METHODS
+
+Several important adjustments were made to the dataframes before conducting any data exploration. First, because the title years were embedded in the title column entries, this information needed to be extracted and stored in its own column. Similarly, a new boolean column was created for each genre stored in the genres column. 
+
+```{r validation-reformat, message=FALSE, warning=FALSE}
+library(lubridate)
+
+validation <- validation %>% mutate(
+  rating_year = year(as_datetime(timestamp)),
+  title_year = str_extract(title, "\\(\\d+\\)$"),
+  title_year = as.numeric(str_remove_all(title_year, "\\(|\\)")),
+  comedy = ifelse(str_detect(genres, "Comedy"), 1, 0),
+  action = ifelse(str_detect(genres, "Action"), 1, 0),
+  children = ifelse(str_detect(genres, "Children"), 1, 0),
+  adventure = ifelse(str_detect(genres, "Adventure"), 1, 0),
+  animation = ifelse(str_detect(genres, "Animation"), 1, 0),
+  drama = ifelse(str_detect(genres, "Drama"), 1, 0),
+  crime = ifelse(str_detect(genres, "Crime"), 1, 0),
+  scifi = ifelse(str_detect(genres, "Sci-Fi"), 1, 0),
+  horror = ifelse(str_detect(genres, "Horror"), 1, 0),
+  thriller = ifelse(str_detect(genres, "Thriller"), 1, 0),
+  mystery = ifelse(str_detect(genres, "Mystery"), 1, 0),
+  romance = ifelse(str_detect(genres, "Romance"), 1, 0),
+  fantasy = ifelse(str_detect(genres, "Fantasy"), 1, 0),
+  musical = ifelse(str_detect(genres, "Musical"), 1, 0),
+  war = ifelse(str_detect(genres, "War"), 1, 0),) %>%
+  select(-genres, -timestamp)
+
+sample_n(validation, 1)
+```
+```{r edx-reformat, echo=FALSE}
+edx <- edx %>% mutate(
+  rating_year = year(as_datetime(timestamp)),
+  title_year = str_extract(title, "\\(\\d+\\)$"),
+  title_year = as.numeric(str_remove_all(title_year, "\\(|\\)")),
+  comedy = ifelse(str_detect(genres, "Comedy"), 1, 0),
+  action = ifelse(str_detect(genres, "Action"), 1, 0),
+  children = ifelse(str_detect(genres, "Children"), 1, 0),
+  adventure = ifelse(str_detect(genres, "Adventure"), 1, 0),
+  animation = ifelse(str_detect(genres, "Animation"), 1, 0),
+  drama = ifelse(str_detect(genres, "Drama"), 1, 0),
+  crime = ifelse(str_detect(genres, "Crime"), 1, 0),
+  scifi = ifelse(str_detect(genres, "Sci-Fi"), 1, 0),
+  horror = ifelse(str_detect(genres, "Horror"), 1, 0),
+  thriller = ifelse(str_detect(genres, "Thriller"), 1, 0),
+  mystery = ifelse(str_detect(genres, "Mystery"), 1, 0),
+  romance = ifelse(str_detect(genres, "Romance"), 1, 0),
+  fantasy = ifelse(str_detect(genres, "Fantasy"), 1, 0),
+  musical = ifelse(str_detect(genres, "Musical"), 1, 0),
+  war = ifelse(str_detect(genres, "War"), 1, 0),) %>%
+  select(-genres, -timestamp)
+
+test_ind <- createDataPartition(edx$rating, times = 1, p = 0.2, list = FALSE)
+
+edx_train <- edx[-test_ind,]
+
+temp <- edx[test_ind,]
+
+edx_test <- temp %>%
+  semi_join(edx_train, by = "movieId") %>%
+  semi_join(edx_train, by = "userId")
+
+rm(temp)
+```
+
+The same adjustments were made to the edx set, which, unlike the validation set, was then further partitioned into edx_train and edx_test sets. 
+
+To determine a baseline RMSE for my predictions, I first created a naive prediction model which simply guessed the average movie rating from the edx_train set.
+
+```{r naive-model}
+mu <- mean(edx_train$rating)
+RMSE(edx_test$rating, rep(mu, nrow(edx_test)))
+```
+
+To develop a more sophisticated model, I wanted to determine whether there were any clear biases among the different genres. For simplicity, I ignored the possible effect of genre combinations (e.g. romantic comedy or sci-fi mystery) and instead focused on genres in isolation, which indicated dramas had the most significant effect on the conditional mean rating.
+
+```{r drama-conditional-mean, message=FALSE, warning=FALSE}
+edx %>% group_by(drama) %>% summarize(avg = mean(rating))
+```
+
+In fact, dramas were rated on average nearly 0.3 stars higher than those without a drama genre designation. Already, the naive model could be improved upon by predicting these averages depending on whether a given movie was categorized as a drama, rather than a single average across all movies. 
+
+There was also a clear bias associated with a movie's year of release:
+
+```{r rating-v-year-plot, echo=FALSE, warning=FALSE, message=FALSE}
+edx %>% group_by(title_year) %>% summarize(avg = mean(rating), n = n()) %>%
+  ggplot(aes(x = title_year, y = avg, size = n)) + geom_point() + geom_smooth()
+```
+
+Most likely, this is due to a selection bias such that individuals only watch older movies that are known to be higher quality like The Wizard of Oz or Gone with the Wind. Whatever the reason may be, this tendency of older movies being rated higher than newer movies needed to be accounted for. Although the loess regression appears to model the effect decently, training on the full dataset will take prohibitively long. Instead, we can approximate the year effect directly. Notice that in the plots below, when faceting by the drama genre, the year effect is approximately the same shape. The drama curve on the right is essentially a vertical transformation equal to the difference in conditional means, 0.3. Also notice the difference in the size of the points, which denotes the number of ratings for each year. Regularization will therefore be used to weight years appropriately.
+
+```{r year-effect-facet, echo=FALSE, warning=FALSE, message=FALSE}
+edx %>% group_by(title_year, drama) %>% summarize(avg = mean(rating), n = n()) %>%
+  ggplot(aes(x = title_year, y = avg, size = n)) + geom_point() + geom_smooth() + facet_grid(.~drama)
+```
+
+We also observe a clear bias associated with different users, meaning some rate movies higher on average and others rate movies lower on average. Below are two plots illustrating this. Each shows a user with more than 100 different movie ratings, one randomly sampled from the top quartile by average rating and the other from the bottom quartile. For each movie these individuals have rated, a difference of their rating versus the movie's average rating among all users is plotted. If these users were unbiased, we would expect approximately half of the differences to be above/below zero. 
+
+```{r high-and-low-raters, echo=FALSE, warning=FALSE, message=FALSE}
+movie_avgs <- edx %>% group_by(movieId) %>% summarize(avg = mean(rating))
+
+high_volume_raters <- edx %>% group_by(userId) %>% summarize(n = n(), avg = mean(rating)) %>% filter(n >= 100)
+
+rating_quartiles <- quantile(high_volume_raters$avg, c(0.25, 0.5, 0.75, 1.0))
+
+high_volume_raters <- high_volume_raters %>% mutate(quartile = case_when(
+  avg < rating_quartiles[1] ~ "bottom",
+  avg >= rating_quartiles[1] & avg < rating_quartiles[2] ~ "third",
+  avg >= rating_quartiles[2] & avg < rating_quartiles[3] ~ "second",
+  avg > rating_quartiles[3] ~ "top"
+))
+
+set.seed(420, sample.kind = "Rounding")
+high_rater <- high_volume_raters %>% filter(quartile == "top") %>% sample_n(1) %>% pull(userId)
+high_rater <- edx %>% filter(userId == high_rater) %>% select(userId, movieId, rating)
+high_rater %>% inner_join(movie_avgs, by = "movieId") %>% mutate(diff = rating - avg) %>%
+  ggplot(aes(x = reorder(as.factor(movieId), diff), y = diff)) + geom_line(group = 1) + 
+  geom_hline(yintercept = 0, color = "blue") + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("High Rater vs. Avg Rating per Movie") + 
+  ylab("Difference (User Rating minus Avg)") + 
+  xlab("Movies Rated by User")
+
+set.seed(420, sample.kind = "Rounding")
+low_rater <- high_volume_raters %>% filter(quartile == "bottom") %>% sample_n(1) %>% pull(userId)
+low_rater <- edx %>% filter(userId == low_rater) %>% select(userId, movieId, rating)
+low_rater %>% inner_join(movie_avgs, by = "movieId") %>% mutate(diff = rating - avg) %>%
+  ggplot(aes(x = reorder(as.factor(movieId), diff), y = diff)) + geom_line(group = 1) + 
+  geom_hline(yintercept = 0, color = "blue") + 
+  theme(axis.text.x = element_blank()) + 
+  ggtitle("Low Rater vs. Avg Rating per Movie") + 
+  ylab("Difference (User Rating minus Avg)") + 
+  xlab("Movies Rated by User")
+```
+
+However, the differences are not centered at zero; a significant majority of the first user's ratings exceed the average rating for each movie he or she has watched, while the second user has the opposite bias. The bias for any given user is therefore defined as the average of all of these differences. To avoid over-fitting a bias estimate for users with relatively few observations (i.e. shrinking their bias estimate toward zero), we will also use regularization. 
+
+The same intuition applies to bias associated with individual movies. For a widely acclaimed movie such as The Godfather, this effect means that a user with higher ratings on average would rate the movie especially highly, while a "grumpy" user's bias may be completely counteracted. Again, we will use regularization to apply the appropriate weighting to movies with relatively few ratings.
+
+
+
+
+RESULTS
+
+In summary, in making predictions on an unknown set of observations, the model will first look to whether a given movie is categorized as a drama to determine a starting point for the prediction. Next, it will make bias estimates for title year, userId, and movieId based on the residuals observed sequentially after factoring in all the prior biases. For example, the first estimate among these three will take into account the fact that we have already adjusted the predictions based on genre. Since title year, userId, and movieId bias estimates will all be regularized, we will test out multiple different values of lambda and choose the one that minimizes the RMSE on the test set. Once a lambda is determined, we will repeat the process to train on the entire edx set and ultimately make our final predictions on the validation set. 
+
+The final model produces the following RMSE:
+
+```{r final-model, echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+# Split edx into training and test sets
+
+test_ind <- createDataPartition(edx$rating, times = 1, p = 0.2, list = FALSE)
+
+edx_train <- edx[-test_ind,]
+
+temp <- edx[test_ind,]
+
+edx_test <- temp %>%
+  semi_join(edx_train, by = "movieId") %>%
+  semi_join(edx_train, by = "userId")
+
+rm(temp)
+
+
+# Estimate conditional means for dramas and non-dramas
+
+mu_drama <- edx_train %>%
+  group_by(drama) %>%
+  summarize(avg_rating = mean(rating)) %>%
+  slice(2) %>%
+  pull(avg_rating)
+
+mu_not_drama <- edx_train %>%
+  group_by(drama) %>%
+  summarize(avg_rating = mean(rating)) %>%
+  slice(1) %>%
+  pull(avg_rating)
+
+edx_train <- edx_train %>%
+  mutate(mu = case_when(drama == 1 ~ mu_drama,
+                        drama == 0 ~ mu_not_drama))
+
+edx_test <- edx_test %>%
+  mutate(mu = case_when(drama == 1 ~ mu_drama,
+                        drama == 0 ~ mu_not_drama))
+
+# Regularized movie, user, and year effects
+# Find lambda that minimizes RMSE of predictions
+
+lambdas <- c(0, seq(3.5, 6, 0.25))
+
+rmses <- sapply(lambdas, function(l){
+  
+  b_yr <- edx_train %>%
+    group_by(title_year) %>%
+    summarize(b_yr = sum(rating - mu)/(n() + l))
+  
+  b_i <- edx_train %>%
+    left_join(b_yr, by = "title_year") %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu - b_yr)/(n() + l))
+  
+  b_u <- edx_train %>%
+    left_join(b_yr, by = "title_year") %>%
+    left_join(b_i, by = "movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - mu - b_yr - b_i)/(n() + l))
+  
+  predictions <- edx_test %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_yr, by = "title_year") %>%
+    mutate(pred = mu + b_i + b_u + b_yr) %>%
+    pull(pred)
+  
+  return(RMSE(edx_test$rating, predictions))
+  
+})
+
+rm(mu_drama, mu_not_drama)
+edx_train <- edx_train %>% select(-mu)
+edx_test <- edx_test %>% select(-mu)
+best_lambda <- lambdas[which.min(rmses)]
+min(rmses)
+
+
+# Train model on full edx dataset using optimized lambda
+
+mu_drama <- edx %>%
+  group_by(drama) %>%
+  summarize(avg_rating = mean(rating)) %>%
+  slice(2) %>%
+  pull(avg_rating)
+
+mu_not_drama <- edx %>%
+  group_by(drama) %>%
+  summarize(avg_rating = mean(rating)) %>%
+  slice(1) %>%
+  pull(avg_rating)
+
+edx <- edx %>%
+  mutate(mu = case_when(drama == 1 ~ mu_drama,
+                        drama == 0 ~ mu_not_drama))
+
+validation <- validation %>%
+  mutate(mu = case_when(drama == 1 ~ mu_drama,
+                        drama == 0 ~ mu_not_drama))
+
+b_yr <- edx %>%
+  group_by(title_year) %>%
+  summarize(b_yr = sum(rating - mu)/(n() + best_lambda))
+
+b_i <- edx %>%
+  left_join(b_yr, by = "title_year") %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu - b_yr)/(n() + best_lambda))
+
+b_u <- edx %>%
+  left_join(b_yr, by = "title_year") %>%
+  left_join(b_i, by = "movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - mu - b_yr - b_i)/(n() + best_lambda))
+
+
+# Use trained model to make predictions in final holdout test set
+
+predictions <- validation %>%
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_yr, by = "title_year") %>%
+  mutate(pred = mu + b_i + b_u + b_yr) %>%
+  pull(pred)
+```
+
+```{r final-rmse}
+RMSE(validation$rating, predictions)
+```
+
+One of the major challenges was determining the most effective way to incorporate a genre effect. Training a linear model inclusive of all 15 genres was not time-feasible. For the same reason, it was also not feasible to incorporate the effects of certain combinations of genres, which I suspect could have offered some predictive value. For example, thrillers and mysteries individually had similar ratings to the overall average, but in combination the genre effect is significant. 
+
+```{r thriller-mystery, message=FALSE, warning=FALSE}
+edx %>% group_by(thriller, mystery) %>% summarize(avg = mean(rating))
+```
+
+Working off the assumption that choosing one genre was most efficient, I determined drama as the best candidate given its prevalence - approximately 43% of the training set - and the magnitude of the difference in conditional means. Indeed, no other genre was able to improve upon the naive prediction model in terms of RMSE as much as drama.
+
+The other aspect of the model that required some trial-and-error was the sequencing of bias estimates. In the end, the order that minimized the RMSE was title year, movieId, and userId. 
+
+
+
+CONCLUSION
+
+The objective of the project was to minimize the RMSE of the final predictions. Before this could even be attempted, several preliminary steps were required. First, data needed to be cleaned and reformatted in such a way that allowed for data exploration. The insights gained from this exercise would provide a framework for building a model. An important aspect to the modeling approach itself was beginning as simple as possible and gradually increasing complexity as accuracy improved. Testing potential changes often was also key. 
+
+The final model achieves a reasonably small RMSE without the use of advanced machine learning algorithms and only four variables, bias estimates for the drama genre, users, movies, and title years. The strength of simplicity may also be the model's greatest shortcoming - the majority of information provided in the dataset does not ultimately factor into predictions. Future work would explore the data further and find ways of taking into account other variables. 
